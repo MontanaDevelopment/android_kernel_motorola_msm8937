@@ -34,8 +34,6 @@
 
 static struct v4l2_device *msm_v4l2_dev;
 static struct list_head    ordered_sd_list;
-static struct mutex        ordered_sd_mtx;
-static struct mutex        v4l2_event_mtx;
 
 static struct pm_qos_request msm_v4l2_pm_qos_request;
 
@@ -409,9 +407,7 @@ int msm_sd_register(struct msm_sd_subdev *msm_subdev)
 	if (WARN_ON(!msm_v4l2_dev) || WARN_ON(!msm_v4l2_dev->dev))
 		return -EIO;
 
-	mutex_lock(&ordered_sd_mtx);
 	msm_add_sd_in_position(msm_subdev, &ordered_sd_list);
-	mutex_unlock(&ordered_sd_mtx);
 	return __msm_sd_register_subdev(&msm_subdev->sd);
 }
 EXPORT_SYMBOL(msm_sd_register);
@@ -810,13 +806,11 @@ static long msm_private_ioctl(struct file *file, void *fh,
 				__func__);
 		}
 
-		mutex_lock(&ordered_sd_mtx);
 		if (!list_empty(&msm_v4l2_dev->subdevs)) {
 			list_for_each_entry(msm_sd, &ordered_sd_list, list)
 				__msm_sd_notify_freeze_subdevs(msm_sd,
 					event_data->status);
 		}
-		mutex_unlock(&ordered_sd_mtx);
 	}
 		break;
 
@@ -838,25 +832,13 @@ static long msm_private_ioctl(struct file *file, void *fh,
 static int msm_unsubscribe_event(struct v4l2_fh *fh,
 	const struct v4l2_event_subscription *sub)
 {
-	int rc;
-
-	mutex_lock(&v4l2_event_mtx);
-	rc = v4l2_event_unsubscribe(fh, sub);
-	mutex_unlock(&v4l2_event_mtx);
-
-	return rc;
+	return v4l2_event_unsubscribe(fh, sub);
 }
 
 static int msm_subscribe_event(struct v4l2_fh *fh,
 	const struct v4l2_event_subscription *sub)
 {
-	int rc;
-
-	mutex_lock(&v4l2_event_mtx);
-	rc = v4l2_event_subscribe(fh, sub, 5, NULL);
-	mutex_unlock(&v4l2_event_mtx);
-
-	return rc;
+	return v4l2_event_subscribe(fh, sub, 5, NULL);
 }
 
 static const struct v4l2_ioctl_ops g_msm_ioctl_ops = {
@@ -1013,11 +995,9 @@ static int msm_close(struct file *filep)
 	struct msm_sd_subdev *msm_sd;
 
 	/*stop all hardware blocks immediately*/
-	mutex_lock(&ordered_sd_mtx);
 	if (!list_empty(&msm_v4l2_dev->subdevs))
 		list_for_each_entry(msm_sd, &ordered_sd_list, list)
 			__msm_sd_close_subdevs(msm_sd, &sd_close);
-	mutex_unlock(&ordered_sd_mtx);
 
 	/* remove msm_v4l2_pm_qos_request */
 	msm_pm_qos_remove_request();
@@ -1274,7 +1254,7 @@ static ssize_t write_logsync(struct file *file, const char __user *buf,
 	uint64_t seq_num = 0;
 	int ret;
 
-	if (copy_from_user(lbuf, buf, sizeof(lbuf) - 1))
+	if (copy_from_user(lbuf, buf, sizeof(lbuf)))
 		return -EFAULT;
 
 	ret = sscanf(lbuf, "%llu", &seq_num);
@@ -1377,8 +1357,6 @@ static int msm_probe(struct platform_device *pdev)
 	msm_init_queue(msm_session_q);
 	spin_lock_init(&msm_eventq_lock);
 	spin_lock_init(&msm_pid_lock);
-	mutex_init(&ordered_sd_mtx);
-	mutex_init(&v4l2_event_mtx);
 	INIT_LIST_HEAD(&ordered_sd_list);
 
 #ifdef CONFIG_DEBUG_CAMERA
