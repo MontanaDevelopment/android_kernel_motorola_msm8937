@@ -16,8 +16,8 @@ Please note we have a code of conduct, please follow it in all your interactions
 
 ## Current Project Maintainers:
 
-[Jarl-Penguin](github.com/JarlPenguin)
+[Jarl-Penguin](https://github.com/JarlPenguin)
 
-[AsD Monio](github.com/AsDMonio)
+[AsD Monio](https://github.com/AsDMonio)
 
-[Rajat Gupta](github.com/rajatgupta1998)
+[Rajat Gupta](https://github.com/rajatgupta1998)
