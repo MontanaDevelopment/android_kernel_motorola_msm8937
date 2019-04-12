@@ -36,7 +36,7 @@ static bool disable_scofix;
 static bool force_scofix;
 
 static int sco_conn;
-static int reset = 1;
+static bool reset = true;
 
 static struct usb_driver btusb_driver;
 
@@ -2004,7 +2004,7 @@ static int btusb_probe(struct usb_interface *intf,
 		struct usb_device *udev = interface_to_usbdev(intf);
 		/* Old firmware would otherwise let ath3k driver load
 		 * patch and sysconfig files */
-		err = get_rome_version(udev, &version);
+		//err = get_rome_version(udev, &version);
 		if (err < 0) {
 			if (le16_to_cpu(udev->descriptor.bcdDevice) <= 0x0001)
 				BT_INFO("FW for ar3k is yet to be downloaded");
@@ -2013,7 +2013,7 @@ static int btusb_probe(struct usb_interface *intf,
 			return -ENODEV;
 		}
 		BT_INFO("Rome Version: 0x%x", version.rom_version);
-		err = rome_download(udev, &version);
+		//err = rome_download(udev, &version);
 		if (err < 0) {
 			BT_ERR("Failed to download ROME firmware");
 			return -ENODEV;
@@ -2317,10 +2317,10 @@ static int btusb_pm_notify(struct notifier_block *b,
 	switch (event) {
 	case PM_SUSPEND_PREPARE:
 		set_bit(BTUSB_PM_SUSPEND, &btusb_pm_flags);
-		down_write(&btusb_pm_sem);
+		//down_write(&btusb_pm_sem);
 		break;
 	case PM_POST_SUSPEND:
-		up_write(&btusb_pm_sem);
+		//up_write(&btusb_pm_sem);
 		clear_bit(BTUSB_PM_SUSPEND, &btusb_pm_flags);
 		break;
 	}
@@ -2364,7 +2364,7 @@ static void __exit btusb_driver_exit(void)
 	 * release the semaphore to avoid deadlock.
 	 */
 	if (test_bit(BTUSB_PM_SUSPEND, &btusb_pm_flags)) {
-		up_write(&btusb_pm_sem);
+		//up_write(&btusb_pm_sem);
 		clear_bit(BTUSB_PM_SUSPEND, &btusb_pm_flags);
 	}
 	usb_deregister(&btusb_driver);
