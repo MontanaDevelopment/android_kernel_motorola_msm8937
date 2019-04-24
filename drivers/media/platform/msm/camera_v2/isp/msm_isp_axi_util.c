@@ -2424,16 +2424,7 @@ int msm_isp_axi_reset(struct vfe_device *vfe_dev,
 			j--;
 			continue;
 		}
-		stream_info->undelivered_request_cnt = 0;
-		while (!list_empty(&stream_info->request_q)) {
-			queue_req = list_first_entry_or_null(
-				&stream_info->request_q,
-				struct msm_vfe_frame_request_queue, list);
-			if (queue_req) {
-				queue_req->cmd_used = 0;
-				list_del(&queue_req->list);
-			}
-		}
+		
 		for (bufq_id = 0; bufq_id < VFE_BUF_QUEUE_MAX; bufq_id++) {
 			bufq_handle = stream_info->bufq_handle[bufq_id];
 			if (!bufq_handle)
