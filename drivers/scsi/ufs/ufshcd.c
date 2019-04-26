@@ -44,7 +44,6 @@
 #include <linux/of.h>
 #include <linux/blkdev.h>
 
-#include <linux/kthread.h>
 #include "ufshcd.h"
 #include "ufshci.h"
 #include "ufs_quirks.h"
@@ -2574,9 +2573,6 @@ static int ufshcd_queuecommand(struct Scsi_Host *host, struct scsi_cmnd *cmd)
 
 	hba = shost_priv(host);
 
-	if (!hba || !hba->is_powered)
-		return 0;
-
 	tag = cmd->request->tag;
 	if (!ufshcd_valid_tag(hba, tag)) {
 		dev_err(hba->dev,
@@ -4194,8 +4190,6 @@ int ufshcd_change_power_mode(struct ufs_hba *hba,
 			     struct ufs_pa_layer_attr *pwr_mode)
 {
 	int ret = 0;
-	int retries = 5;
-	static int failure_count;
 
 	/* if already configured to the requested pwr_mode */
 	if (pwr_mode->gear_rx == hba->pwr_info.gear_rx &&
@@ -4258,35 +4252,14 @@ int ufshcd_change_power_mode(struct ufs_hba *hba,
 	ufshcd_dme_set(hba, UIC_ARG_MIB(DME_LocalAFC0ReqTimeOutVal),
 			DL_AFC0ReqTimeOutVal_Default);
 
-	do {
-		ret = ufshcd_uic_change_pwr_mode(hba, pwr_mode->pwr_rx << 4
+	ret = ufshcd_uic_change_pwr_mode(hba, pwr_mode->pwr_rx << 4
 			| pwr_mode->pwr_tx);
-	} while (ret && retries--);
 
 	if (ret) {
 		ufshcd_update_error_stats(hba, UFS_ERR_POWER_MODE_CHANGE);
 		dev_err(hba->dev,
 			"%s: power mode change failed %d\n", __func__, ret);
-
-		dev_err(hba->dev, "[RX,TX]current gear=[%d,%d],lane[%d,%d],pwr[%d,%d],rate=[%d]\n",
-			hba->pwr_info.gear_rx, hba->pwr_info.gear_tx,
-			hba->pwr_info.lane_rx, hba->pwr_info.lane_tx,
-			hba->pwr_info.pwr_rx, hba->pwr_info.pwr_tx,
-			hba->pwr_info.hs_rate);
-
-		dev_err(hba->dev, "[RX,TX]new gear=[%d,%d],lane[%d,%d] pwr[%d,%d],rate=[%d]\n",
-			pwr_mode->gear_rx, pwr_mode->gear_tx,
-			pwr_mode->lane_rx, pwr_mode->lane_tx,
-			pwr_mode->pwr_rx, pwr_mode->pwr_tx,
-			pwr_mode->hs_rate);
-		ufshcd_print_host_state(hba);
-
-		if (++failure_count > 10)
-			BUG();
-
 	} else {
-		failure_count = 0;
-
 		ufshcd_vops_pwr_change_notify(hba, POST_CHANGE, NULL,
 						pwr_mode);
 
@@ -4776,7 +4749,7 @@ static int ufshcd_slave_alloc(struct scsi_device *sdev)
 	/* REPORT SUPPORTED OPERATION CODES is not supported */
 	sdev->no_report_opcodes = 1;
 
-	/* WRITE_SAME command is not supported */
+	/* WRITE_SAME command is not supported*/
 	sdev->no_write_same = 1;
 
 	ufshcd_set_queue_depth(sdev);
@@ -5165,10 +5138,10 @@ static void __ufshcd_transfer_req_compl(struct ufs_hba *hba,
 					completion = ktime_get();
 					delta_us = ktime_us_delta(completion,
 						  req->lat_hist_io_start);
-					/* rq_data_dir() => true if WRITE */
-					blk_update_latency_hist(&hba->io_lat_s,
-						(rq_data_dir(req) == READ),
-						delta_us);
+					blk_update_latency_hist(
+						(rq_data_dir(req) == READ) ?
+						&hba->io_lat_read :
+						&hba->io_lat_write, delta_us);
 				}
 			}
 			/* Do not touch lrbp after scsi done */
@@ -6462,11 +6435,6 @@ static int ufshcd_eh_host_reset_handler(struct scsi_cmnd *cmd)
 
 	spin_unlock_irqrestore(hba->host->host_lock, flags);
 
-	if (err == FAILED) {
-		pr_err("%s, fail to recovery ufs", __func__);
-		BUG();
-	}
-
 	return err;
 }
 
@@ -7216,44 +7184,6 @@ out:
 	return err;
 }
 
-
-int ufshcd_get_serialnumber(struct ufs_hba *hba, char *serialnumber)
-{
-	int err;
-	u8 sn_index;
-	u8 *desc_buf;
-
-	desc_buf = kzalloc(QUERY_DESC_STRING_MAX_SIZE, GFP_KERNEL);
-	if (!desc_buf) {
-		err =  -ENOMEM;
-		return err;
-	}
-
-	err = ufshcd_read_device_desc(hba, desc_buf,
-				QUERY_DESC_DEVICE_MAX_SIZE);
-	if (err) {
-		dev_err(hba->dev, "%s: Read device desc failed\n", __func__);
-		goto out;
-	}
-
-	sn_index = desc_buf[DEVICE_DESC_PARAM_SN];
-	memset(desc_buf, 0, QUERY_DESC_STRING_MAX_SIZE);
-	err = ufshcd_read_string_desc(hba, sn_index, desc_buf,
-					QUERY_DESC_STRING_MAX_SIZE, ASCII_STD);
-	if (err) {
-		dev_err(hba->dev, "%s: Read SN string failed\n", __func__);
-		goto out;
-	}
-
-	strlcpy(serialnumber, (desc_buf + QUERY_DESC_HDR_SIZE),
-		min_t(u8, desc_buf[QUERY_DESC_LENGTH_OFFSET] -2,
-		      QUERY_DESC_STRING_MAX_SIZE));
-out:
-	kfree(desc_buf);
-	return err;
-}
-
-
 /**
  * ufshcd_ioctl - ufs ioctl callback registered in scsi_host
  * @dev: scsi device required for per LUN queries
@@ -7267,7 +7197,6 @@ static int ufshcd_ioctl(struct scsi_device *dev, int cmd, void __user *buffer)
 {
 	struct ufs_hba *hba = shost_priv(dev->host);
 	int err = 0;
-	char *buf;
 
 	BUG_ON(!hba);
 	if (!buffer) {
@@ -7282,26 +7211,6 @@ static int ufshcd_ioctl(struct scsi_device *dev, int cmd, void __user *buffer)
 				buffer);
 		pm_runtime_put_sync(hba->dev);
 		break;
-	case UFS_IOCTL_GETSN:
-
-		buf = kzalloc(QUERY_DESC_STRING_MAX_SIZE, GFP_KERNEL);
-		pm_runtime_get_sync(hba->dev);
-		err = ufshcd_get_serialnumber(hba, buf);
-		pm_runtime_put_sync(hba->dev);
-
-		if (err) {
-			dev_err(hba->dev, "%s: Failed get serial number.\n", __func__);
-			kfree(buf);
-			return err;
-		}
-
-		err = copy_to_user(buffer, buf, strlen(buf));
-		if(err)
-			dev_err(hba->dev, "%s: Failed copying back to user.\n",
-				__func__);
-		kfree(buf);
-		break;
-
 	default:
 		err = -ENOIOCTLCMD;
 		dev_dbg(hba->dev, "%s: Unsupported ioctl cmd %d\n", __func__,
@@ -8650,35 +8559,11 @@ static inline void ufshcd_add_sysfs_nodes(struct ufs_hba *hba)
  */
 int ufshcd_shutdown(struct ufs_hba *hba)
 {
-	int ret = 0;
-	struct Scsi_Host *host = hba->host;
-	unsigned long flags;
-
-	if (ufshcd_is_ufs_dev_poweroff(hba) && ufshcd_is_link_off(hba))
-		goto out;
-
-	if (pm_runtime_suspended(hba->dev)) {
-		ret = ufshcd_runtime_resume(hba);
-		if (ret)
-			goto out;
-	}
-
-	if (host->ehandler)
-		kthread_stop(host->ehandler);
-
-	flush_work(&hba->clk_gating.ungate_work);
-	ret = ufshcd_suspend(hba, UFS_SHUTDOWN_PM);
-
-	spin_lock_irqsave(host->host_lock, flags);
-	scsi_block_requests(host);
-	hba->is_powered = false;
-	spin_unlock_irqrestore(host->host_lock, flags);
-
-	pr_info("ufshcd_shutdown\n");
-out:
-	if (ret)
-		dev_err(hba->dev, "%s failed, err %d\n", __func__, ret);
-	/* allow force shutdown even in case of errors */
+	/*
+	 * TODO: This function should send the power down notification to
+	 * UFS device and then power off the UFS link. But we need to be sure
+	 * that there will not be any new UFS requests issued after this.
+	 */
 	return 0;
 }
 EXPORT_SYMBOL(ufshcd_shutdown);
@@ -8698,9 +8583,10 @@ latency_hist_store(struct device *dev, struct device_attribute *attr,
 
 	if (kstrtol(buf, 0, &value))
 		return -EINVAL;
-	if (value == BLK_IO_LAT_HIST_ZERO)
-		blk_zero_latency_hist(&hba->io_lat_s);
-	else if (value == BLK_IO_LAT_HIST_ENABLE ||
+	if (value == BLK_IO_LAT_HIST_ZERO) {
+		memset(&hba->io_lat_read, 0, sizeof(hba->io_lat_read));
+		memset(&hba->io_lat_write, 0, sizeof(hba->io_lat_write));
+	} else if (value == BLK_IO_LAT_HIST_ENABLE ||
 		 value == BLK_IO_LAT_HIST_DISABLE)
 		hba->latency_hist_enabled = value;
 	return count;
@@ -8711,8 +8597,14 @@ latency_hist_show(struct device *dev, struct device_attribute *attr,
 		  char *buf)
 {
 	struct ufs_hba *hba = dev_get_drvdata(dev);
+	size_t written_bytes;
 
-	return blk_latency_hist_show(&hba->io_lat_s, buf);
+	written_bytes = blk_latency_hist_show("Read", &hba->io_lat_read,
+			buf, PAGE_SIZE);
+	written_bytes += blk_latency_hist_show("Write", &hba->io_lat_write,
+			buf + written_bytes, PAGE_SIZE - written_bytes);
+
+	return written_bytes;
 }
 
 static DEVICE_ATTR(latency_hist, S_IRUGO | S_IWUSR,
@@ -9440,3 +9332,4 @@ MODULE_AUTHOR("Vinayak Holikatti <h.vinayak@samsung.com>");
 MODULE_DESCRIPTION("Generic UFS host controller driver Core");
 MODULE_LICENSE("GPL");
 MODULE_VERSION(UFSHCD_DRIVER_VERSION);
+
